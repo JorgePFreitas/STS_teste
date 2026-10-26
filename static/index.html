@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Teste de Cobrança por Voz</title>
+    <script src="/livekit-client.umd.min.js"></script>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: #0f172a;
+        color: #e2e8f0;
+      }
+
+      main {
+        width: min(680px, 92vw);
+        padding: 32px;
+        border: 1px solid #334155;
+        border-radius: 16px;
+        background: #111827;
+        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: 1.6rem;
+      }
+
+      p {
+        margin: 0 0 20px;
+        color: #94a3b8;
+        line-height: 1.5;
+      }
+
+      .status {
+        display: inline-block;
+        margin-bottom: 20px;
+        padding: 6px 12px;
+        border-radius: 999px;
+        background: #1e293b;
+        color: #cbd5e1;
+        font-size: 0.9rem;
+      }
+
+      .status.ok {
+        background: #052e16;
+        color: #86efac;
+      }
+
+      .status.err {
+        background: #450a0a;
+        color: #fca5a5;
+      }
+
+      .actions {
+        display: flex;
+        gap: 12px;
+        margin-bottom: 24px;
+      }
+
+      button {
+        border: 0;
+        border-radius: 10px;
+        padding: 12px 18px;
+        font-size: 1rem;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+      }
+
+      #start {
+        background: #22c55e;
+        color: #052e16;
+      }
+
+      #stop {
+        background: #334155;
+        color: #e2e8f0;
+      }
+
+      #talk {
+        width: 100%;
+        margin-bottom: 20px;
+        padding: 16px;
+        background: #38bdf8;
+        color: #082f49;
+        touch-action: none;
+        user-select: none;
+      }
+
+      #talk.active {
+        background: #0ea5e9;
+        box-shadow: 0 0 0 4px rgba(14, 165, 233, 0.25);
+      }
+
+      #audio {
+        margin-bottom: 12px;
+        background: #f59e0b;
+        color: #451a03;
+      }
+
+      #agent-audio {
+        width: 100%;
+        margin-bottom: 16px;
+      }
+
+      details {
+        margin-bottom: 20px;
+        padding: 12px 16px;
+        border: 1px solid #334155;
+        border-radius: 10px;
+      }
+
+      summary {
+        cursor: pointer;
+        font-weight: 600;
+      }
+
+      ul {
+        margin: 12px 0 0;
+        padding-left: 20px;
+        color: #cbd5e1;
+        line-height: 1.8;
+      }
+
+      pre {
+        max-height: 220px;
+        overflow: auto;
+        margin: 0;
+        padding: 12px;
+        border-radius: 10px;
+        background: #020617;
+        color: #94a3b8;
+        font-size: 0.8rem;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Cobrança por Voz</h1>
+      <p>
+        Teste local com LiveKit + OpenAI Realtime. Clique em iniciar, permita o
+        microfone e use o botão abaixo para falar. Use fones para evitar eco.
+      </p>
+
+      <div class="status" id="status">Desconectado</div>
+
+      <div class="actions">
+        <button id="start">Iniciar conversa</button>
+        <button id="stop" disabled>Encerrar</button>
+      </div>
+
+      <audio id="agent-audio" autoplay playsinline controls></audio>
+      <button id="audio" hidden>Ativar áudio</button>
+      <button id="talk" disabled>Segurar para falar</button>
+
+      <details>
+        <summary>CPFs fictícios para teste</summary>
+        <ul>
+          <li><strong>111.111.111-11</strong> — João da Silva — 01/01/1990 — dívida de R$ 1.584,56</li>
+          <li><strong>222.222.222-22</strong> — Maria Souza — 02/02/1985 — dívida de R$ 4.890,00</li>
+          <li><strong>333.333.333-33</strong> — Carlos Pereira — 03/03/2000 — sem dívida</li>
+        </ul>
+      </details>
+
+      <pre id="log"></pre>
+    </main>
+
+    <script>
+      const { Room, RoomEvent } = LivekitClient;
+
+      const statusEl = document.getElementById("status");
+      const startButton = document.getElementById("start");
+      const stopButton = document.getElementById("stop");
+      const talkButton = document.getElementById("talk");
+      const audioButton = document.getElementById("audio");
+      const agentAudio = document.getElementById("agent-audio");
+      const logEl = document.getElementById("log");
+
+      let room = null;
+      let talking = false;
+
+      function setStatus(text, kind = "") {
+        statusEl.textContent = text;
+        statusEl.className = `status ${kind}`.trim();
+      }
+
+      function addLog(text) {
+        logEl.textContent += `${text}\n`;
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      async function enableAudio() {
+        if (!room) return;
+
+        try {
+          await room.startAudio();
+
+          if (agentAudio.srcObject || agentAudio.currentSrc) {
+            await agentAudio.play();
+          }
+
+          audioButton.hidden = false;
+        } catch (error) {
+          console.error(error);
+          audioButton.hidden = false;
+          addLog("Áudio bloqueado pelo navegador. Clique em Ativar áudio.");
+        }
+      }
+
+      async function startTalking(event) {
+        if (!room || talking) return;
+
+        if (event?.pointerId !== undefined) {
+          talkButton.setPointerCapture(event.pointerId);
+        }
+
+        talking = true;
+        talkButton.classList.add("active");
+        setStatus("Falando...", "ok");
+
+        try {
+          await room.localParticipant.setMicrophoneEnabled(true);
+        } catch (error) {
+          console.error(error);
+          talking = false;
+          talkButton.classList.remove("active");
+          setStatus(`Erro no microfone: ${error.message}`, "err");
+        }
+      }
+
+      async function stopTalking() {
+        if (!room || !talking) return;
+
+        talking = false;
+        talkButton.classList.remove("active");
+
+        try {
+          await room.localParticipant.setMicrophoneEnabled(false);
+        } catch (error) {
+          console.error(error);
+        }
+
+        if (room) {
+          setStatus("Conectado — segure para falar", "ok");
+        }
+      }
+
+      async function startConversation() {
+        startButton.disabled = true;
+        setStatus("Conectando...");
+
+        try {
+          const response = await fetch("/api/token", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              room_name: `cobranca-${crypto.randomUUID()}`,
+              participant_identity: `user-${crypto.randomUUID()}`,
+              participant_name: "Cliente",
+            }),
+          });
+
+          if (!response.ok) {
+            throw new Error(`Falha ao obter token (${response.status})`);
+          }
+
+          const { server_url, participant_token } = await response.json();
+
+          room = new Room({ adaptiveStream: false, dynacast: false });
+
+          room.on(RoomEvent.Connected, () => {
+            setStatus("Conectado");
+            addLog("Conectado à sala.");
+          });
+
+          room.on(RoomEvent.Disconnected, () => {
+            setStatus("Desconectado");
+            startButton.disabled = false;
+            stopButton.disabled = true;
+            talkButton.disabled = true;
+            audioButton.hidden = true;
+            agentAudio.pause();
+            agentAudio.srcObject = null;
+            agentAudio.removeAttribute("src");
+            agentAudio.load();
+            talking = false;
+            room = null;
+            addLog("Desconectado.");
+          });
+
+          room.on(RoomEvent.AudioPlaybackStatusChanged, () => {
+            if (room) audioButton.hidden = room.canPlaybackAudio;
+          });
+
+          room.on(RoomEvent.ParticipantConnected, (participant) => {
+            addLog(`Participante entrou: ${participant.identity}`);
+          });
+
+          room.on(RoomEvent.TrackSubscribed, (track, _publication, participant) => {
+            if (track.kind === "audio") {
+              track.attach(agentAudio);
+              agentAudio.play().catch(() => {
+                audioButton.hidden = false;
+                addLog("O navegador bloqueou o áudio. Clique em Ativar áudio.");
+              });
+              addLog(`Áudio recebido de ${participant.identity}.`);
+            }
+          });
+
+          room.on(RoomEvent.TrackUnsubscribed, (track) => {
+            if (track.kind === "audio") {
+              track.detach(agentAudio);
+            }
+          });
+
+          room.registerTextStreamHandler("lk.transcription", async (reader, participantInfo) => {
+            try {
+              const text = await reader.readAll();
+              const isFinal = reader.info.attributes?.["lk.transcription_final"] === "true";
+              if (isFinal) addLog(`${participantInfo.identity}: ${text}`);
+            } catch (error) {
+              console.error("Falha ao ler transcrição:", error);
+            }
+          });
+
+          room.on(RoomEvent.ParticipantAttributesChanged, (changed) => {
+            if (changed["lk.agent.state"]) {
+              setStatus(`Agente: ${changed["lk.agent.state"]}`, "ok");
+            }
+          });
+
+          await room.connect(server_url, participant_token);
+          await enableAudio();
+
+          const permission = await navigator.mediaDevices.getUserMedia({ audio: true });
+          permission.getTracks().forEach((track) => track.stop());
+
+          stopButton.disabled = false;
+          talkButton.disabled = false;
+          setStatus("Conectado — segure para falar", "ok");
+        } catch (error) {
+          console.error(error);
+          setStatus(`Erro: ${error.message}`, "err");
+          addLog(`Erro: ${error.message}`);
+
+          if (room) {
+            await room.disconnect();
+            room = null;
+          }
+
+          startButton.disabled = false;
+        }
+      }
+
+      async function stopConversation() {
+        talking = false;
+        talkButton.classList.remove("active");
+        talkButton.disabled = true;
+        audioButton.hidden = true;
+
+        if (room) {
+          await room.disconnect();
+          room = null;
+        }
+
+        setStatus("Desconectado");
+        startButton.disabled = false;
+        stopButton.disabled = true;
+      }
+
+      agentAudio.addEventListener("playing", () => addLog("Reproduzindo áudio do agente."));
+      agentAudio.addEventListener("pause", () => addLog("Áudio do agente pausado."));
+      startButton.addEventListener("click", startConversation);
+      stopButton.addEventListener("click", stopConversation);
+      audioButton.addEventListener("click", enableAudio);
+      talkButton.addEventListener("pointerdown", startTalking);
+      talkButton.addEventListener("pointerup", stopTalking);
+      talkButton.addEventListener("pointercancel", stopTalking);
+      talkButton.addEventListener("pointerleave", stopTalking);
+    </script>
+  </body>
+</html>

@@ -1,0 +1,15 @@
+[project]
+name = "teste-sts"
+version = "0.1.0"
+description = "Exemplo local de agente de cobrança com LiveKit Agents e OpenAI Realtime"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.162.0",
+    "livekit-agents[openai]>=1.8.9,<2",
+    "livekit-api>=1.2.2",
+    "python-dotenv>=1.0.1",
+    "uvicorn[standard]>=0.40.0",
+]
+
+[tool.uv]
+package = false
